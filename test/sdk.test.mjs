@@ -134,3 +134,42 @@ test('speech methods reject blank text and voice IDs without making a request', 
   await assert.rejects(() => giggy.speech.stream({ text: 'Hi.', voiceId: ' ' }), /voiceId must be/);
   assert.equal(requests, 0);
 });
+
+test('speech.stream rejects unexpected PCM content types', async () => {
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: 'unexpected response' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  const giggy = new Giggy({ apiKey });
+  await assert.rejects(
+    () => giggy.speech.stream({ text: 'Hello.', voiceId }),
+    /Expected Giggy streaming PCM audio/,
+  );
+});
+
+test('speech.stream accepts parameterized PCM content types', async () => {
+  globalThis.fetch = async () =>
+    new Response(new Uint8Array([1, 2, 3, 4]), {
+      status: 200,
+      headers: { 'content-type': 'audio/pcm; rate=24000' },
+    });
+
+  const giggy = new Giggy({ apiKey });
+  const stream = await giggy.speech.stream({ text: 'Hello.', voiceId });
+  const result = await stream.getReader().read();
+
+  assert.equal(result.done, false);
+  assert.deepEqual(Array.from(result.value), [1, 2, 3, 4]);
+});
+
+test('speech.stream rejects a missing response body', async () => {
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+
+  const giggy = new Giggy({ apiKey });
+  await assert.rejects(
+    () => giggy.speech.stream({ text: 'Hello.', voiceId }),
+    /empty streaming response body/,
+  );
+});

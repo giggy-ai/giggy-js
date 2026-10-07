@@ -11,6 +11,11 @@ jobs:
   validate:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "24"]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,7 +23,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - name: Install dependencies
@@ -34,9 +39,63 @@ jobs:
         run: |
           node --check examples/basic-tts.mjs
           node --check examples/streaming-tts.mjs
+          node --check test/live-smoke.mjs
 
       - name: Verify package contents
         run: npm pack --dry-run
+
+      - name: Verify packaged SDK installs and imports
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_root="$PWD"
+          temp_dir="$(mktemp -d)"
+
+          cleanup() {
+            rm -rf "$temp_dir"
+            rm -f "$package_root"/*.tgz
+          }
+
+          trap cleanup EXIT
+
+          tarball="$(npm pack --silent)"
+
+          cd "$temp_dir"
+
+          printf '{"private":true,"type":"module"}\n' \
+            > package.json
+
+          npm install --ignore-scripts "$package_root/$tarball"
+
+          node --input-type=module <<'NODE'
+          import {
+            Giggy,
+            GiggyAPIError,
+          } from '@giggy-ai/sdk';
+
+          if (typeof Giggy !== 'function') {
+            throw new Error('Giggy export is missing.');
+          }
+
+          if (typeof GiggyAPIError !== 'function') {
+            throw new Error('GiggyAPIError export is missing.');
+          }
+
+          const client = new Giggy({
+            apiKey: 'giggy_sk_test_not_real',
+          });
+
+          if (typeof client.speech.create !== 'function') {
+            throw new Error('speech.create is missing.');
+          }
+
+          if (typeof client.speech.stream !== 'function') {
+            throw new Error('speech.stream is missing.');
+          }
+
+          console.log('Packaged SDK imports successfully.');
+          NODE
 
       - name: Fail if a likely real Giggy key is committed
         shell: bash

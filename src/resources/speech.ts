@@ -60,7 +60,27 @@ export class SpeechResource {
     });
 
     if (!response.body) {
-      throw new Error('Giggy returned an empty streaming response body.');
+      throw new Error(
+        'Giggy returned an empty streaming response body.',
+      );
+    }
+
+    const requestedFormat =
+      params.outputFormat ?? DEFAULT_STREAM_OUTPUT_FORMAT;
+
+    if (requestedFormat.startsWith('pcm_')) {
+      const contentType = (
+        response.headers.get('content-type') ?? ''
+      ).toLowerCase();
+
+      if (!contentType.startsWith('audio/pcm')) {
+        await response.body.cancel();
+
+        throw new Error(
+          'Expected Giggy streaming PCM audio but received ' +
+            `"${contentType || 'unknown'}".`,
+        );
+      }
     }
 
     return response.body;
