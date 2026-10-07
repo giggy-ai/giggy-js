@@ -8,22 +8,11 @@ Giggy is a text-to-speech (TTS) API for developers building voice agents and voi
 
 ## Install
 
-The initial npm release has not been published yet. After it is released, install the package with:
+Requires Node.js 22 or newer.
 
 ```bash
 npm install @giggy-ai/sdk
 ```
-
-Until then, build the SDK from its public source repository:
-
-```bash
-git clone https://github.com/giggy-ai/giggy-js.git
-cd giggy-js
-npm ci
-npm run build
-```
-
-Requires Node.js 22 or newer.
 
 ## Get a Giggy API key
 
@@ -51,11 +40,11 @@ export GIGGY_VOICE_ID="your-giggy-voice-uuid"
 
 ## Generate your first MP3
 
-After building from source, create `speech.mjs` in the cloned repository. This example runs before the npm release:
+Create `speech.mjs`:
 
 ```js
 import { writeFile } from 'node:fs/promises';
-import { Giggy } from './dist/index.js';
+import { Giggy } from '@giggy-ai/sdk';
 
 const apiKey = process.env.GIGGY_API_KEY;
 const voiceId = process.env.GIGGY_VOICE_ID;
@@ -74,8 +63,6 @@ await writeFile('speech.mp3', audio);
 console.log('Wrote speech.mp3');
 ```
 
-After npm publication, install `@giggy-ai/sdk` and use `import { Giggy } from '@giggy-ai/sdk';` in a new project.
-
 Run it with:
 
 ```bash
@@ -84,7 +71,14 @@ node speech.mjs
 
 ## Build from source
 
-The SDK has zero runtime dependencies. In the cloned repository, use `npm ci` and `npm run build` to generate the JavaScript and TypeScript declarations in `dist/`.
+The SDK has zero runtime dependencies. Clone the public repository and build the JavaScript and TypeScript declarations in `dist/`:
+
+```bash
+git clone https://github.com/giggy-ai/giggy-js.git
+cd giggy-js
+npm ci
+npm run build
+```
 
 ## Basic text-to-speech
 
