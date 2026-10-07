@@ -1,0 +1,56 @@
+name: SDK CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Check examples
+        run: |
+          node --check examples/basic-tts.mjs
+          node --check examples/streaming-tts.mjs
+
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Fail if a likely real Giggy key is committed
+        shell: bash
+        run: |
+          matches="$(
+            grep -R -n -E 'giggy_sk_[A-Za-z0-9_-]{16,}' . \
+              --exclude-dir=.git \
+              --exclude-dir=node_modules \
+              --exclude-dir=dist \
+              || true
+          )"
+
+          if [ -n "$matches" ]; then
+            printf '%s\n' "$matches"
+            echo "Potential Giggy API key found."
+            exit 1
+          fi
