@@ -6,3 +6,8 @@ dist/
 
 npm-debug.log*
 .DS_Store
+*.tgz
+speech.mp3
+speech.pcm
+speech.wav
+!.env.example

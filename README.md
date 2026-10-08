@@ -24,11 +24,11 @@ export GIGGY_API_KEY="giggy_sk_..."
 
 ## Find a Giggy voice
 
-The public voice catalog is available at `GET https://giggy.ai/v1/voices`. This endpoint requires a Giggy API key. Each catalog entry's `voice_id` is the UUID to pass as `voiceId` to the SDK.
+Available voices for your Giggy account are returned by `GET https://giggy.ai/v1/voices`. This endpoint requires a Giggy API key as a bearer token. Each entry's `voice_id` is the UUID to pass as `voiceId` to the SDK.
 
 ```bash
 curl --fail --show-error \
-  --header "xi-api-key: ${GIGGY_API_KEY}" \
+  --header "Authorization: Bearer ${GIGGY_API_KEY}" \
   "https://giggy.ai/v1/voices"
 ```
 
@@ -162,16 +162,17 @@ Unsuccessful API responses throw `GiggyAPIError`, which exposes `status`, the ra
 
 - Documentation: https://giggy.ai/docs/speech-api
 - OpenAPI: https://giggy.ai/v1/openapi.json
-- Runnable integrations: https://github.com/GRQDigitalCapital/giggy-examples
-- MCP: https://github.com/GRQDigitalCapital/giggy-mcp
+- Runnable integrations: https://github.com/giggy-ai/giggy-examples
+- MCP: https://github.com/giggy-ai/giggy-mcp
+- Python SDK: https://github.com/giggy-ai/giggy-python
 - Pricing: https://giggy.ai/pricing
 
 ## Framework integration examples
 
-- [LiveKit TTS](https://github.com/GRQDigitalCapital/giggy-examples/tree/main/livekit/python)
-- [Pipecat TTS](https://github.com/GRQDigitalCapital/giggy-examples/tree/main/pipecat/python)
-- [Vapi custom TTS](https://github.com/GRQDigitalCapital/giggy-examples/tree/main/vapi)
-- [OpenAI-compatible TTS](https://github.com/GRQDigitalCapital/giggy-examples/tree/main/node/openai-compatible)
-- [Giggy MCP](https://github.com/GRQDigitalCapital/giggy-mcp)
+- [LiveKit TTS](https://github.com/giggy-ai/giggy-examples/tree/main/livekit/python)
+- [Pipecat TTS](https://github.com/giggy-ai/giggy-examples/tree/main/pipecat/python)
+- [Vapi custom TTS](https://github.com/giggy-ai/giggy-examples/tree/main/vapi)
+- [OpenAI-compatible TTS](https://github.com/giggy-ai/giggy-examples/tree/main/node/openai-compatible)
+- [Giggy MCP](https://github.com/giggy-ai/giggy-mcp)
 
-These examples demonstrate Giggy compatibility. The LiveKit, Pipecat, and Vapi integrations do not use this SDK internally.
+These examples demonstrate Giggy compatibility. LiveKit, Pipecat and Vapi integrations do not currently use this SDK internally.
