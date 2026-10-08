@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1
+
+### Documentation
+
+- Clarify authenticated account voice discovery and the `voices[].voice_id` UUID.
+- Improve the install-first Node.js and TypeScript quick start.
+- Link the SDK to canonical Giggy examples, MCP, and Python repositories.
+
 ## 0.1.0
 
 Initial public Giggy JavaScript/TypeScript SDK release.
