@@ -6,6 +6,8 @@ Official JavaScript and TypeScript SDK for the Giggy text-to-speech API.
 
 Giggy is a text-to-speech (TTS) API for developers building voice agents and voice-enabled products. Generate speech with Giggy's Batch, Fast, and Streaming speech modes.
 
+[Create a Giggy account](https://giggy.ai/?login=1&utm_source=github&utm_medium=referral&utm_campaign=developer_onboarding&utm_content=giggy-js_readme) Ã‚Â· [Speech API guide](https://giggy.ai/docs/speech-api?utm_source=github&utm_medium=referral&utm_campaign=developer_onboarding&utm_content=giggy-js_docs) Ã‚Â· [Browser voice sandbox](https://github.com/giggy-ai/giggy-voice-agent)
+
 ## Install
 
 Requires Node.js 22 or newer.
@@ -16,7 +18,7 @@ npm install @giggy-ai/sdk
 
 ## Get a Giggy API key
 
-Create an API key through your Giggy account. Keep it on the server; never embed it in browser JavaScript.
+Create an API key in [Giggy Speech API](https://giggy.ai/app/speech-api). Keep it on the server; never embed it in browser JavaScript.
 
 ```bash
 export GIGGY_API_KEY="giggy_sk_..."
@@ -62,6 +64,8 @@ const audio = await giggy.speech.create({
 await writeFile('speech.mp3', audio);
 console.log('Wrote speech.mp3');
 ```
+
+PowerShell environment setup: `$env:GIGGY_API_KEY="your-api-key"; $env:GIGGY_VOICE_ID="returned-voice-uuid"`.
 
 Run it with:
 
@@ -155,8 +159,8 @@ Unsuccessful API responses throw `GiggyAPIError`, which exposes `status`, the ra
 - `SpeechCreateParams`
 - `SpeechStreamParams`
 - `SpeechMode` (`batch` or `fast`)
-- `giggy.speech.create(params)` → `Promise<Uint8Array>`
-- `giggy.speech.stream(params)` → `Promise<ReadableStream<Uint8Array>>`
+- `giggy.speech.create(params)` Ã¢â€ â€™ `Promise<Uint8Array>`
+- `giggy.speech.stream(params)` Ã¢â€ â€™ `Promise<ReadableStream<Uint8Array>>`
 
 ## Developer resources
 
@@ -176,3 +180,5 @@ Unsuccessful API responses throw `GiggyAPIError`, which exposes `status`, the ra
 - [Giggy MCP](https://github.com/giggy-ai/giggy-mcp)
 
 These examples demonstrate Giggy compatibility. LiveKit, Pipecat and Vapi integrations do not currently use this SDK internally.
+
+Registry checked on 2026-10-12: npm latest is `0.1.0`; this checkout is `0.1.1`. Source-only changes are not a claim that a new package has been published. Run `npm ci && npm test` for offline validation. API calls can consume credits; consult current pricing.
