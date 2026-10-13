@@ -6,4 +6,12 @@ export type {
   SpeechCreateParams,
   SpeechMode,
   SpeechStreamParams,
+  TranscriptionSubmitParams,
+  TranscriptionStreamParams,
+  TranscriptionEvent,
+  TranscriptionAdmission,
+  TranscriptionGeneration,
+  TranscriptionResult,
+  LiveTranscriptionParams,
+  LiveTranscriptionFrame,
 } from './types.js';

@@ -1,7 +1,7 @@
 {
   "name": "@giggy-ai/sdk",
   "version": "0.1.1",
-  "description": "Official JavaScript and TypeScript SDK for the Giggy text-to-speech API.",
+  "description": "Official JavaScript and TypeScript SDK for Giggy text-to-speech and speech-to-text.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -38,7 +38,9 @@
   "keywords": [
     "giggy",
     "text-to-speech",
+    "speech-to-text",
     "tts",
+    "stt",
     "speech",
     "speech-synthesis",
     "voice-ai",

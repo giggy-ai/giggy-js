@@ -1,4 +1,4 @@
-import { SpeechResource } from './resources/speech.js';
+import { SpeechResource, TranscriptionsResource } from './resources/speech.js';
 import type {
   GiggyClientConfig,
   GiggyClientOptions,
@@ -8,6 +8,7 @@ const DEFAULT_BASE_URL = 'https://giggy.ai/v1';
 
 export class Giggy {
   readonly speech: SpeechResource;
+  readonly transcriptions: TranscriptionsResource;
 
   constructor(options: GiggyClientOptions) {
     if (!options?.apiKey?.trim()) {
@@ -20,5 +21,6 @@ export class Giggy {
     };
 
     this.speech = new SpeechResource(config);
+    this.transcriptions = new TranscriptionsResource(config);
   }
 }

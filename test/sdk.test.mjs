@@ -173,3 +173,93 @@ test('speech.stream rejects a missing response body', async () => {
     /empty streaming response body/,
   );
 });
+
+test('transcriptions.submit streams a WAV body and preserves admission options', async () => {
+  let requestUrl;
+  let requestInit;
+  let uploaded = '';
+  const id = '00000000-0000-4000-8000-000000000001';
+  globalThis.fetch = async (url, init) => {
+    requestUrl = String(url);
+    requestInit = init;
+    for await (const chunk of init.body) uploaded += new TextDecoder().decode(chunk);
+    return new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'queued' } }), { status: 202 });
+  };
+  const admission = await new Giggy({ apiKey }).transcriptions.submit({ audioPath: 'package.json', mode: 'fast', language: 'en', clientRequestId: id });
+  assert.equal(admission.generation.generation_uuid, id);
+  assert.match(requestUrl, /\/audio\/transcriptions\?mode=fast&language=en&client_request_id=/);
+  assert.equal(new Headers(requestInit.headers).get('xi-api-key'), apiKey);
+  assert.equal(uploaded, await (await import('node:fs/promises')).readFile('package.json', 'utf8'));
+});
+
+test('transcriptions.result verifies completion and fetches the signed artifact without the key', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return requests.length === 1
+      ? new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'completed', result: { url: 'https://example.test/transcript.json' } } }))
+      : new Response(JSON.stringify({ text: 'hello', languages: ['English'] }));
+  };
+  const result = await new Giggy({ apiKey }).transcriptions.result(id);
+  assert.equal(result.text, 'hello');
+  assert.equal(new Headers(requests[0].init.headers).get('xi-api-key'), apiKey);
+  assert.equal(new Headers(requests[1].init.headers).get('xi-api-key'), null);
+});
+
+test('transcriptions.transcribe submits once and returns the durable transcript', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    if (requests.length === 1) return new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'queued' } }), { status: 202 });
+    if (requests.length === 2) return new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'processing' } }));
+    if (requests.length === 3) return new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'completed' } }));
+    if (requests.length === 4) return new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'completed', result: { url: 'https://example.test/transcript.json' } } }));
+    return new Response(JSON.stringify({ text: 'ready' }));
+  };
+  const transcript = await new Giggy({ apiKey }).transcriptions.transcribe({ audioPath: 'package.json' }, { pollIntervalMs: 1 });
+  assert.equal(transcript.text, 'ready');
+  assert.equal(requests.length, 5);
+  assert.equal(requests.filter(url => url.includes('/audio/transcriptions')).length, 1);
+});
+
+test('transcriptions.stream parses SSE across UTF-8 and CRLF boundaries', async () => {
+  const chunks = [
+    'event: transcript_chunk\r',
+    '\ndata: {"text":"one","replace":true}\r\n\r',
+    '\nevent: transcript_chunk\ndata: {"text":"one two","replace":true}\n\n',
+  ];
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+      controller.close();
+    },
+  }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  const events = [];
+  for await (const event of new Giggy({ apiKey }).transcriptions.stream({ audioPath: 'package.json' })) events.push(event);
+  assert.deepEqual(events.map(event => event.data.text), ['one', 'one two']);
+});
+
+test('transcriptions.live admits the existing microphone protocol and sends an ordered PCM frame', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const token = 'a'.repeat(64);
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), init });
+    return requests.length === 1
+      ? new Response(`event: microphone_ready\ndata: {"generation_uuid":"${id}","attempt":1,"input_token":"${token}"}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      : new Response('{"ok":true}', { status: 200 });
+  };
+  const giggy = new Giggy({ apiKey });
+  for await (const { event, data } of giggy.transcriptions.live({ clientRequestId: id })) {
+    if (event === 'microphone_ready') {
+      await giggy.transcriptions.sendLiveFrame({ generationUuid: data.generation_uuid, inputToken: data.input_token, sequence: 0, pcm: new Uint8Array(16000), complete: true });
+    }
+  }
+  assert.equal(requests[0].url, 'https://giggy.ai/v1/audio/transcriptions');
+  assert.deepEqual(JSON.parse(requests[0].init.body), { mode: 'streaming', microphone: true, client_request_id: id });
+  assert.equal(requests[1].url, `https://giggy.ai/api/generations/${id}/stt-input`);
+  assert.equal(new Headers(requests[1].init.headers).get('xi-api-key'), null);
+  assert.equal(JSON.parse(requests[1].init.body).sequence, 0);
+});
