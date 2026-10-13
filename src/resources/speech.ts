@@ -203,21 +203,32 @@ export class TranscriptionsResource {
   async transcribe(params: TranscriptionSubmitParams, options: { pollIntervalMs?: number; timeoutMs?: number } = {}): Promise<TranscriptionResult> {
     const pollIntervalMs = options.pollIntervalMs ?? 2500;
     const timeoutMs = options.timeoutMs ?? 1_800_000;
-    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-      throw new TypeError('pollIntervalMs and timeoutMs must be positive integers.');
+    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs <= 0 || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 4_294_967_295) {
+      throw new TypeError('pollIntervalMs must be a positive integer; timeoutMs must be an integer between 1 and 4294967295.');
     }
-    const admission = await this.submit(params);
-    const id = admission.generation.generation_uuid;
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = params.signal === undefined ? timeoutSignal : AbortSignal.any([params.signal, timeoutSignal]);
+    let id: string | undefined;
     const deadline = Date.now() + timeoutMs;
-    while (true) {
-      const generation = await this.get(id, params.signal);
-      if (generation.status === 'completed') return this.result(id, params.signal);
-      if (['failed', 'cancelled', 'admission_failed'].includes(generation.status)) {
-        throw new Error(`Transcription ${id} is ${generation.status}.`);
+    try {
+      const admission = await this.submit({ ...params, signal });
+      id = admission.generation.generation_uuid;
+      while (true) {
+        signal.throwIfAborted();
+        const generation = await this.get(id, signal);
+        if (generation.status === 'completed') return await this.result(id, signal);
+        if (['failed', 'cancelled', 'admission_failed'].includes(generation.status)) {
+          throw new Error(`Transcription ${id} is ${generation.status}.`);
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error(`Transcription ${id} did not complete within ${timeoutMs} ms.`);
+        await delay(Math.min(pollIntervalMs, remaining), undefined, { signal });
       }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error(`Transcription ${id} did not complete within ${timeoutMs} ms.`);
-      await delay(Math.min(pollIntervalMs, remaining), undefined, params.signal === undefined ? {} : { signal: params.signal });
+    } catch (error) {
+      if (timeoutSignal.aborted && !params.signal?.aborted) {
+        throw new Error(`Transcription ${id ?? 'admission (generation UUID not received)'} did not complete within ${timeoutMs} ms; do not resubmit an ambiguous upload.`, { cause: error });
+      }
+      throw error;
     }
   }
 
@@ -326,7 +337,10 @@ export class TranscriptionsResource {
           if (!data) continue;
           const payload: unknown = JSON.parse(data);
           if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Giggy returned an invalid transcript event.');
-          yield { event, data: payload as Record<string, unknown> };
+          if (!['generation_created', 'microphone_ready', 'transcript_chunk', 'generation_updated'].includes(event)) {
+            throw new Error(`Unexpected transcript event: ${event || '(unnamed)'}. Reconcile the generation through get().`);
+          }
+          yield { event, data: payload } as TranscriptionEvent;
         }
         if (done) {
           if (pending.trim()) throw new Error('Transcript event stream ended mid-event.');

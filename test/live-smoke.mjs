@@ -3,11 +3,30 @@ import { Giggy } from '../dist/index.js';
 const apiKey = process.env.GIGGY_API_KEY;
 const voiceId = process.env.GIGGY_VOICE_ID;
 
-if (!apiKey || !voiceId) {
-  throw new Error('Set GIGGY_API_KEY and GIGGY_VOICE_ID.');
+if (!apiKey || (!voiceId && !process.env.GIGGY_STT_WAV)) {
+  throw new Error('Set GIGGY_API_KEY and either GIGGY_VOICE_ID or GIGGY_STT_WAV.');
 }
 
 const giggy = new Giggy({ apiKey });
+
+if (process.env.GIGGY_STT_WAV) {
+  if (process.env.GIGGY_RUN_PAID_SMOKE !== '1') throw new Error('Recorded Fast/Streaming STT smoke requires GIGGY_RUN_PAID_SMOKE=1.');
+  const transcript = await giggy.transcriptions.transcribe({ audioPath: process.env.GIGGY_STT_WAV, mode: 'fast', language: 'en' }, { timeoutMs: 120000 });
+  if (!transcript.text.trim()) throw new Error('Fast STT returned no lexical transcript.');
+  if (process.env.GIGGY_STT_REFERENCE && transcript.text !== process.env.GIGGY_STT_REFERENCE) throw new Error('Fast STT differs from the reference.');
+  console.log('Fast STT completed:', transcript.text);
+  let id;
+  let previews = 0;
+  for await (const { event, data } of giggy.transcriptions.stream({ audioPath: process.env.GIGGY_STT_WAV, language: 'en', signal: AbortSignal.timeout(120000) })) {
+    if (event === 'generation_created') { id = data.generation.generation_uuid; console.log('Uploaded Streaming STT generation:', id); }
+    if (event === 'transcript_chunk') previews++;
+  }
+  if (!id) throw new Error('Uploaded Streaming STT did not return an admission UUID.');
+  const final = await giggy.transcriptions.result(id, AbortSignal.timeout(30000));
+  if (final.text !== transcript.text || !previews) throw new Error('Uploaded Streaming STT preview or final transcript differs.');
+  console.log('Uploaded Streaming STT completed:', final.text);
+  process.exit(0);
+}
 
 console.log('Testing Batch TTS...');
 

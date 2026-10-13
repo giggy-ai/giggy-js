@@ -94,6 +94,10 @@ jobs:
             throw new Error('speech.stream is missing.');
           }
 
+          for (const method of ['submit', 'transcribe', 'get', 'result', 'stream', 'live', 'sendLiveFrame']) {
+            if (typeof client.transcriptions[method] !== 'function') throw new Error(`transcriptions.${method} is missing.`);
+          }
+
           console.log('Packaged SDK imports successfully.');
           NODE
 

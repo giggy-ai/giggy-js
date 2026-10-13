@@ -14,6 +14,8 @@ Requires Node.js 22 or newer.
 npm install @giggy-ai/sdk
 ```
 
+STT requires version **0.1.1 or later**. Check `npm view @giggy-ai/sdk version` before installing. Until 0.1.1 appears in the registry, install the source checkout with `npm install`, `npm run build`, then `npm install /absolute/path/to/giggy-js` in your application. Version 0.1.0 provides TTS only.
+
 ## Get a Giggy API key
 
 Create an API key through your Giggy account. Keep it on the server; never embed it in browser JavaScript.
@@ -278,3 +280,40 @@ Unsuccessful API responses throw `GiggyAPIError`, which exposes `status`, the ra
 - [Giggy MCP](https://github.com/giggy-ai/giggy-mcp)
 
 These examples demonstrate Giggy compatibility. LiveKit, Pipecat and Vapi integrations do not currently use this SDK internally.
+
+## Transcription method reference
+
+All methods belong to `giggy.transcriptions`. SDK defaults select free Batch; the REST endpoint defaults to paid Fast.
+
+| Method | Inputs and defaults | Returns |
+| --- | --- | --- |
+| `transcribe(params, { pollIntervalMs: 2500, timeoutMs: 1800000 })` | `audioPath`, optional Batch/Fast `mode`, `language`, `clientRequestId`, `signal` | Promise of the final transcript |
+| `submit(params)` | The same WAV admission parameters | Promise of admission metadata |
+| `get(uuid, signal?)` | Owning generation UUID | Promise of generation status |
+| `result(uuid, signal?)` | Completed generation UUID | Promise of signed transcript JSON; no API key sent to artifact host |
+| `stream(params)` | `audioPath`, optional `language/clientRequestId/signal`; paid Streaming | Async generator of typed transcript events |
+| `live({ clientRequestId?, signal? })` | Paid live admission; automatic language detection | Async generator of typed transcript events |
+| `sendLiveFrame({ generationUuid, inputToken, sequence, pcm, complete?, signal? })` | Ordered PCM16 Uint8Array; even length; maximum 32,000 bytes | Promise<void> after acknowledged acceptance |
+
+`transcribe` applies a single deadline from before upload through status polling and artifact retrieval. Its timeout is combined with your AbortSignal; aborting either interrupts network I/O and polling waits. A timeout or abort stops this client call, but does not cancel an admitted uploaded recording. The error contains its UUID when admission was received. `timeoutMs` must be an integer from 1 to 4294967295; `pollIntervalMs` must be a positive integer. Other methods accept your signal so your application can set its own deadline.
+
+`TranscriptionEvent` is a discriminated union: checking `event` narrows `data` to the existing payload. For `generation_created`, read `data.generation.generation_uuid`; for `microphone_ready`, read `data.generation_uuid/attempt/input_token`; for `transcript_chunk`, use `data.text/sequence/replace/complete`; for `generation_updated`, read `data.status` and optional `data.generation`. Never persist the input token. Replace cumulative preview text, and reconcile durable completion after EOF. The SDK rejects an unknown named event rather than silently treating it as a supported payload.
+
+## Troubleshooting and migration
+
+| Symptom | Action |
+| --- | --- |
+| `transcriptions` is undefined | Check your installed package: STT starts at 0.1.1; 0.1.0 is TTS only. |
+| HTTP 401/403 | Check key validity and its owning space. Keep the key on your server. |
+| HTTP 429 | Stop new admissions and honor the server response; never replay an ambiguous upload automatically. |
+| Upload timeout before a UUID | Keep the original input/request identity and inspect History before submitting again. `clientRequestId` is not an idempotency guarantee. |
+| Timeout or SSE EOF after a UUID | Use `get(uuid)` to distinguish processing from failure, then `result(uuid)` on completion. |
+| Completed result missing/expired | Read status again with the owning key; use a refreshed signed URL when available. Retention or deletion can remove content permanently. |
+| Live input error | Abort/close the live generator and reconcile status. Unfinished live disconnects cancel work; uploaded-WAV disconnects do not. |
+| Empty text | No speech was detected; inspect the actual recording. |
+
+HTTP API failures raise `GiggyAPIError` with status and raw body. Parameter errors raise `TypeError`. Transcription timeouts and malformed/unavailable/terminal failed results raise `Error`; caller abort preserves the signal's reason. Log UUIDs and statuses, not signed URLs, keys or live input tokens.
+
+To migrate an AssemblyAI recording workflow, map `client.transcripts.transcribe({ audio })` to `giggy.transcriptions.transcribe({ audioPath: wavPath })`. The result's `text` remains a string, but URLs and arbitrary media need local conversion to PCM16 mono 16 kHz WAV. Speaker labels, word times, confidence, subtitles and speech-analysis options have no corresponding Giggy fields. Live event handling must follow cumulative revisions and explicit session completion, with 30 seconds of audio and 35 seconds from readiness; AssemblyAI turn detection options do not translate to Giggy request fields.
+
+See the [Node recording walkthrough](https://github.com/giggy-ai/giggy-examples/tree/main/node/basic-tts#transcribe-a-recording) and [framework STT guide](https://github.com/giggy-ai/giggy-examples#stt-in-voice-agent-frameworks).

@@ -59,10 +59,11 @@ export interface LiveTranscriptionFrame {
   signal?: AbortSignal;
 }
 
-export interface TranscriptionEvent {
-  event: string;
-  data: Record<string, unknown>;
-}
+export type TranscriptionEvent =
+  | { event: 'generation_created'; data: TranscriptionAdmission }
+  | { event: 'microphone_ready'; data: { generation_uuid: string; attempt: number; input_token: string } }
+  | { event: 'transcript_chunk'; data: { generation_uuid: string; attempt: number; text: string; sequence: number; replace: true; complete: boolean } }
+  | { event: 'generation_updated'; data: { generation_uuid: string; status: string; generation?: TranscriptionGeneration; attempt?: number } };
 
 export interface TranscriptionAdmission {
   generation: TranscriptionGeneration;

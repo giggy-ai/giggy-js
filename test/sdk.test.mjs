@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { Giggy, GiggyAPIError } from '../dist/index.js';
 
@@ -222,6 +223,24 @@ test('transcriptions.transcribe submits once and returns the durable transcript'
   assert.equal(transcript.text, 'ready');
   assert.equal(requests.length, 5);
   assert.equal(requests.filter(url => url.includes('/audio/transcriptions')).length, 1);
+  for (const stalledStage of ['upload', 'status', 'artifact']) {
+    requests.length = 0;
+    globalThis.fetch = async (url, init) => {
+      requests.push(String(url));
+      if ((stalledStage === 'upload' && String(url).includes('/audio/transcriptions'))
+        || (stalledStage === 'status' && String(url).includes('/generations/'))
+        || (stalledStage === 'artifact' && String(url).includes('example.test'))) {
+        await delay(200, undefined, { signal: init.signal });
+      }
+      return String(url).includes('/audio/transcriptions')
+        ? new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'queued' } }), { status: 202 })
+        : String(url).includes('/generations/')
+          ? new Response(JSON.stringify({ generation: { generation_uuid: id, status: 'completed', result: { url: 'https://example.test/transcript.json' } } }))
+          : new Response(JSON.stringify({ text: 'ready' }));
+    };
+    await assert.rejects(new Giggy({ apiKey }).transcriptions.transcribe({ audioPath: 'package.json' }, { timeoutMs: 20 }), /did not complete within 20 ms/);
+    assert.equal(requests.filter(url => url.includes('/audio/transcriptions')).length, 1);
+  }
 });
 
 test('transcriptions.stream parses SSE across UTF-8 and CRLF boundaries', async () => {
