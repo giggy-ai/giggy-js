@@ -2,7 +2,9 @@
 
 [![SDK CI](https://github.com/giggy-ai/giggy-js/actions/workflows/ci.yml/badge.svg)](https://github.com/giggy-ai/giggy-js/actions/workflows/ci.yml)
 
-Official JavaScript and TypeScript SDK for Giggy text-to-speech and recorded-audio transcription.
+Official JavaScript and TypeScript SDK for Giggy text-to-speech, recorded-audio speech-to-text and short live PCM transcription sessions.
+
+Start with [one-call recording transcription](#transcribe-a-recording), [uploaded-WAV transcript revisions](#stream-transcript-revisions-from-an-uploaded-wav), or [live PCM replay](#live-microphone-pcm-session). The Node live example replays a file through the live input protocol; applications supply microphone capture. Live input is PCM16 mono 16 kHz, 0.5–30 seconds per session.
 
 Giggy provides text-to-speech and speech-to-text APIs for developers building voice agents and voice-enabled products.
 
@@ -14,7 +16,9 @@ Requires Node.js 22 or newer.
 npm install @giggy-ai/sdk
 ```
 
-STT requires version **0.1.1 or later**. Check `npm view @giggy-ai/sdk version` before installing. Until 0.1.1 appears in the registry, install the source checkout with `npm install`, `npm run build`, then `npm install /absolute/path/to/giggy-js` in your application. Version 0.1.0 provides TTS only.
+STT is available in the published **0.1.1** release. Install `npm install @giggy-ai/sdk@0.1.1` to reproduce these examples. Version 0.1.0 provides TTS only.
+
+Choose another integration in the [developer tool guide](https://giggy.ai/docs/speech-api#api-developer-tools): [Python](https://github.com/giggy-ai/giggy-python), [Pipecat TTS/live STT](https://github.com/giggy-ai/pipecat-giggy), [n8n TTS](https://github.com/giggy-ai/n8n-nodes-giggy), or [MCP speech/transcription tools](https://github.com/giggy-ai/giggy-mcp). For executable recording and TTS walkthroughs, use [giggy-examples](https://github.com/giggy-ai/giggy-examples).
 
 ## Get a Giggy API key
 
@@ -300,6 +304,12 @@ All methods belong to `giggy.transcriptions`. SDK defaults select free Batch; th
 `TranscriptionEvent` is a discriminated union: checking `event` narrows `data` to the existing payload. For `generation_created`, read `data.generation.generation_uuid`; for `microphone_ready`, read `data.generation_uuid/attempt/input_token`; for `transcript_chunk`, use `data.text/sequence/replace/complete`; for `generation_updated`, read `data.status` and optional `data.generation`. Never persist the input token. Replace cumulative preview text, and reconcile durable completion after EOF. The SDK rejects an unknown named event rather than silently treating it as a supported payload.
 
 ## Troubleshooting and migration
+
+### Migrating OpenAI speech and transcription
+
+OpenAI-compatible **TTS** uses `https://giggy.ai/v1/audio/speech`. Keep the OpenAI speech client, set `baseURL: 'https://giggy.ai/v1'`, use your Giggy API key, set `model: 'giggyspeech'`, and use a Giggy voice UUID. Choose a supported response format and set `maxRetries: 0` for synthesis. See the [existing OpenAI-client example](https://github.com/giggy-ai/giggy-examples/tree/main/node/openai-compatible).
+
+**STT is a separate contract.** Replace an OpenAI `audio.transcriptions.create(...)` call with `giggy.transcriptions.transcribe({ audioPath: 'recording.wav', mode: 'batch' })` and consume `result.text`. A `baseURL` change alone does not migrate STT: Giggy's REST input is raw WAV with `xi-api-key`, rather than an OpenAI multipart upload, and its Batch/Fast admission returns a generation UUID before the final transcript. The SDK handles that existing lifecycle. SDK transcription defaults to Batch; raw REST defaults to paid Fast. Convert input locally to PCM16 mono 16 kHz WAV and remove unsupported transcription options rather than inventing fields.
 
 | Symptom | Action |
 | --- | --- |
