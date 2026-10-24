@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import WebSocket from 'ws';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
@@ -152,6 +153,7 @@ export class SpeechResource {
 
 export class TranscriptionsResource {
   readonly #config: GiggyClientConfig;
+  readonly #live = new Map<string, { socket: WebSocket; attempt: number; sequence: number; bytes: number; ended: boolean; acknowledged: boolean; sending: boolean }>();
 
   constructor(config: GiggyClientConfig) {
     this.#config = config;
@@ -273,48 +275,114 @@ export class TranscriptionsResource {
   }
 
   async *live(params: LiveTranscriptionParams = {}): AsyncGenerator<TranscriptionEvent> {
-    if (params.clientRequestId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(params.clientRequestId)) {
-      throw new TypeError('clientRequestId must be a UUID.');
-    }
-    const url = `${this.#config.baseURL}/audio/transcriptions`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'xi-api-key': this.#config.apiKey, 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: 'streaming', microphone: true,
-        ...(params.clientRequestId === undefined ? {} : { client_request_id: params.clientRequestId }) }),
-      ...(params.signal === undefined ? {} : { signal: params.signal }),
+    if (params.clientRequestId !== undefined) throw new TypeError('Live WebSocket identities are assigned by the server; omit clientRequestId.');
+    const base = new URL(this.#config.baseURL);
+    if (base.pathname.replace(/\/$/, '') !== '/v1' || base.username || base.password || base.search || base.hash || !['http:', 'https:'].includes(base.protocol)) throw new TypeError('baseURL must be an API origin ending with /v1.');
+    if (base.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)) throw new TypeError('Live STT requires HTTPS except for loopback fixtures.');
+    if (params.timeoutMs !== undefined && (!Number.isSafeInteger(params.timeoutMs) || params.timeoutMs <= 0 || params.timeoutMs > 4_294_967_295)) throw new TypeError('timeoutMs must be a positive integer no greater than 4294967295.');
+    params.signal?.throwIfAborted();
+    const url = new URL('/v1/audio/transcriptions', base);
+    url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url, { headers: { 'xi-api-key': this.#config.apiKey },
+      followRedirects: false, perMessageDeflate: false, maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
+    const signal = AbortSignal.any([AbortSignal.timeout(params.timeoutMs ?? 150000), ...(params.signal ? [params.signal] : [])]);
+    const queue: Record<string, any>[] = [];
+    let wake: (() => void) | undefined, failure: Error | undefined, id: string | undefined;
+    let closed = false, terminal = false, queuedBytes = 0, lastSequence = -1, finalText: string | undefined;
+    socket.on('message', (bytes, binary) => {
+      try {
+        if (binary) throw new Error('Unexpected binary STT response.');
+        const data = Array.isArray(bytes) ? Buffer.concat(bytes) : Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+        const value = JSON.parse(data.toString());
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid live STT event.');
+        queuedBytes += Buffer.byteLength(JSON.stringify(value));
+        if (queuedBytes > 16 * 1024 * 1024 || queue.length >= 1024) throw new Error('Live STT event queue exceeded its bound.');
+        queue.push(value); wake?.();
+      } catch { failure = new Error('Invalid live STT response; reconcile its generation.'); socket.terminate(); wake?.(); }
     });
-    if (!response.ok) throw new GiggyAPIError({ status: response.status, body: await response.text(), method: 'POST', url });
-    if (response.status !== 200 || !(response.headers.get('content-type') ?? '').includes('text/event-stream') || !response.body) {
-      await response.body?.cancel();
-      throw new Error('Giggy did not return a live transcript event stream.');
+    socket.on('error', () => { failure = new Error('Live STT transport failed; no audio was retried.'); wake?.(); });
+    socket.on('close', () => { closed = true; wake?.(); });
+    const abort = () => { failure = new Error('Live STT aborted or timed out; reconcile its generation.'); socket.terminate(); wake?.(); };
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', resolve); socket.once('error', () => reject(new Error('Cannot open live STT socket.')));
+        socket.once('close', () => reject(new Error('Live STT socket closed before opening.')));
+        if (signal.aborted) abort();
+      });
+      socket.send(JSON.stringify({ type: 'start', format: 'raw', encoding: 'LINEAR16', sampleRateHz: 16000,
+        interimResults: true, options: { endpointing: 'external' }, ...(params.language ? { language: params.language } : {}) }));
+      for (;;) {
+        if (failure) throw failure;
+        const payload = queue.shift();
+        if (!payload) {
+          if (closed) { if (!terminal) throw new Error('Live STT closed without verified completion.'); break; }
+          await new Promise<void>(resolve => { wake = resolve; }); wake = undefined; continue;
+        }
+        queuedBytes -= Buffer.byteLength(JSON.stringify(payload));
+        if (payload.type === 'generation_created') {
+          const admitted = payload.generation_uuid ?? payload.generation?.generation_uuid;
+          if (id || typeof admitted !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(admitted)) throw new Error('Invalid live admission identity.');
+          id = admitted;
+          yield { event: 'generation_created', data: { ...payload, generation: payload.generation ?? { generation_uuid: id, status: 'processing' } } };
+        } else if (payload.type === 'ready') {
+          if (!id || payload.generation_uuid !== id || this.#live.has(id) || !Number.isSafeInteger(payload.attempt) || payload.attempt < 1 || payload.sampleRateHz !== 16000) throw new Error('Invalid live STT readiness.');
+          this.#live.set(id, { socket, attempt: payload.attempt, sequence: 0, bytes: 0, ended: false, acknowledged: false, sending: false });
+          yield { event: 'microphone_ready', data: { generation_uuid: id, attempt: payload.attempt } };
+        } else if (payload.type === 'input_complete') {
+          const state = id ? this.#live.get(id) : undefined;
+          if (!state || payload.generation_uuid !== id || !state.ended || state.acknowledged || payload.sequence !== state.sequence) throw new Error('Invalid live final input acknowledgement.');
+          state.acknowledged = true;
+          yield { event: 'input_complete', data: { generation_uuid: id!, sequence: payload.sequence } };
+        } else if (payload.type === 'transcription') {
+          const state = id ? this.#live.get(id) : undefined;
+          const text = payload.alternatives?.[0]?.transcript;
+          if (!state || payload.generation_uuid !== id || payload.attempt !== state.attempt || !Number.isSafeInteger(payload.sequence) || payload.sequence <= lastSequence || payload.replace !== true || typeof payload.is_final !== 'boolean' || typeof text !== 'string' || finalText !== undefined) throw new Error('Invalid live transcript fence.');
+          lastSequence = payload.sequence;
+          if (payload.is_final) {
+            if (!state.ended || !state.acknowledged) throw new Error('Final transcript preceded acknowledged input completion.');
+            finalText = text;
+          }
+          yield { event: 'transcript_chunk', data: { generation_uuid: id!, attempt: state.attempt, sequence: payload.sequence, replace: true, complete: payload.is_final, text } };
+        } else if (payload.type === 'generation_updated') {
+          if (!id || payload.generation_uuid !== id) throw new Error('Live generation identity changed.');
+          const status = payload.status ?? payload.generation?.status;
+          if (['failed', 'cancelled', 'admission_failed'].includes(status)) throw new Error('Live STT generation failed; no audio was replayed.');
+          if (status === 'completed') {
+            const state = this.#live.get(id);
+            if (!state?.acknowledged || finalText === undefined) throw new Error('Live STT completed without a fenced final.');
+            const result = await this.result(id, signal);
+            if (result.text !== finalText || result.audio_duration_ms !== Math.ceil(state.bytes / 32)) throw new Error('Saved transcript or duration differs from live STT.');
+            terminal = true;
+          }
+          yield { event: 'generation_updated', data: payload as any };
+          if (terminal) break;
+        } else throw new Error('Unexpected live STT event; reconcile its generation.');
+      }
+    } finally {
+      signal.removeEventListener('abort', abort);
+      if (id) this.#live.delete(id);
+      socket.terminate();
     }
-    yield* this.#events(response);
   }
 
   async sendLiveFrame(params: LiveTranscriptionFrame): Promise<void> {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.generationUuid)) {
-      throw new TypeError('generationUuid must be a UUID.');
-    }
-    if (!/^[0-9a-f]{64}$/.test(params.inputToken)) throw new TypeError('inputToken must be the microphone_ready capability.');
-    if (!Number.isSafeInteger(params.sequence) || params.sequence < 0) throw new TypeError('sequence must be a nonnegative integer.');
-    if (!(params.pcm instanceof Uint8Array) || params.pcm.byteLength > 32000 || params.pcm.byteLength % 2 || (!params.pcm.byteLength && !params.complete)) {
-      throw new TypeError('pcm must be an even PCM16 byte frame of at most one second.');
-    }
-    const base = new URL(this.#config.baseURL);
-    if (base.pathname.replace(/\/$/, '') !== '/v1') throw new TypeError('baseURL must end with /v1 for live input.');
-    const url = new URL(`/api/generations/${params.generationUuid.toLowerCase()}/stt-input`, base).toString();
-    const response = await fetch(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ input_token: params.inputToken, sequence: params.sequence,
-        pcm_base64: Buffer.from(params.pcm).toString('base64'), complete: params.complete === true }),
-      ...(params.signal === undefined ? {} : { signal: params.signal }),
-    });
-    if (!response.ok) throw new GiggyAPIError({ status: response.status, body: await response.text(), method: 'POST', url });
-    const accepted: unknown = await response.json();
-    if (!accepted || typeof accepted !== 'object' || (accepted as Record<string, unknown>).ok !== true) {
-      throw new Error('Giggy did not accept the PCM frame.');
-    }
+    const state = this.#live.get(params.generationUuid);
+    if (!state || state.ended || state.sending || params.sequence !== state.sequence) throw new TypeError('Live frame must match the ready session and next sequence.');
+    if (!(params.pcm instanceof Uint8Array) || params.pcm.byteLength > 32000 || params.pcm.byteLength % 2 || (!params.pcm.byteLength && !params.complete) || (params.complete !== undefined && typeof params.complete !== 'boolean') || state.bytes + params.pcm.byteLength > 43200000 * 32) throw new TypeError('Invalid PCM16 frame or admitted duration.');
+    params.signal?.throwIfAborted();
+    if (state.socket.readyState !== WebSocket.OPEN || state.socket.bufferedAmount > 32000) throw new Error('Live audio socket is unavailable or backpressured.');
+    state.sending = true;
+    try {
+      if (params.pcm.byteLength) {
+        await new Promise<void>((resolve, reject) => state.socket.send(params.pcm, { binary: true }, error => error ? reject(new Error('Live audio send failed; no replay.')) : resolve()));
+        state.bytes += params.pcm.byteLength; state.sequence++;
+      }
+      if (params.complete) {
+        state.ended = true;
+        await new Promise<void>((resolve, reject) => state.socket.send(JSON.stringify({ type: 'stop' }), error => error ? reject(new Error('Live stop failed; no replay.')) : resolve()));
+      }
+    } finally { state.sending = false; }
   }
 
   async *#events(response: Response): AsyncGenerator<TranscriptionEvent> {

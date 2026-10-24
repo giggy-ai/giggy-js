@@ -47,12 +47,14 @@ export interface TranscriptionStreamParams {
 
 export interface LiveTranscriptionParams {
   clientRequestId?: string;
+  language?: string;
+  timeoutMs?: number;
   signal?: AbortSignal;
 }
 
 export interface LiveTranscriptionFrame {
   generationUuid: string;
-  inputToken: string;
+  inputToken?: string;
   sequence: number;
   pcm: Uint8Array;
   complete?: boolean;
@@ -61,7 +63,8 @@ export interface LiveTranscriptionFrame {
 
 export type TranscriptionEvent =
   | { event: 'generation_created'; data: TranscriptionAdmission }
-  | { event: 'microphone_ready'; data: { generation_uuid: string; attempt: number; input_token: string } }
+  | { event: 'microphone_ready'; data: { generation_uuid: string; attempt: number; input_token?: string } }
+  | { event: 'input_complete'; data: { generation_uuid: string; sequence: number } }
   | { event: 'transcript_chunk'; data: { generation_uuid: string; attempt: number; text: string; sequence: number; replace: true; complete: boolean } }
   | { event: 'generation_updated'; data: { generation_uuid: string; status: string; generation?: TranscriptionGeneration; attempt?: number } };
 

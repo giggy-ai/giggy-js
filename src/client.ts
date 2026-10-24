@@ -4,7 +4,7 @@ import type {
   GiggyClientOptions,
 } from './types.js';
 
-const DEFAULT_BASE_URL = 'https://giggy.ai/v1';
+const DEFAULT_BASE_URL = 'https://api.giggy.ai/v1';
 
 export class Giggy {
   readonly speech: SpeechResource;

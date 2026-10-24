@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { WebSocketServer } from 'ws';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { Giggy, GiggyAPIError } from '../dist/index.js';
@@ -31,7 +32,7 @@ test('speech.create maps SDK fields to the native Giggy API', async () => {
   const giggy = new Giggy({ apiKey });
   const audio = await giggy.speech.create({ text: 'Hello.', voiceId, speed: 1 });
   assert.deepEqual(Array.from(audio), [1, 2, 3]);
-  assert.equal(capturedUrl, 'https://giggy.ai/v1/text-to-speech');
+  assert.equal(capturedUrl, 'https://api.giggy.ai/v1/text-to-speech');
   assert.equal(capturedInit.method, 'POST');
 
   const headers = new Headers(capturedInit.headers);
@@ -105,7 +106,7 @@ test('API failures throw GiggyAPIError with the raw response body', async () => 
       assert.equal(error.status, 400);
       assert.equal(error.body, 'invalid request');
       assert.equal(error.method, 'POST');
-      assert.equal(error.url, 'https://giggy.ai/v1/text-to-speech');
+      assert.equal(error.url, 'https://api.giggy.ai/v1/text-to-speech');
       return true;
     },
   );
@@ -260,25 +261,66 @@ test('transcriptions.stream parses SSE across UTF-8 and CRLF boundaries', async 
   assert.deepEqual(events.map(event => event.data.text), ['one', 'one two']);
 });
 
-test('transcriptions.live admits the existing microphone protocol and sends an ordered PCM frame', async () => {
+test('transcriptions.live uses one socket and verifies completion fences without replay', async () => {
   const id = '00000000-0000-4000-8000-000000000001';
-  const token = 'a'.repeat(64);
-  const requests = [];
-  globalThis.fetch = async (url, init) => {
-    requests.push({ url: String(url), init });
-    return requests.length === 1
-      ? new Response(`event: microphone_ready\ndata: {"generation_uuid":"${id}","attempt":1,"input_token":"${token}"}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-      : new Response('{"ok":true}', { status: 200 });
-  };
-  const giggy = new Giggy({ apiKey });
-  for await (const { event, data } of giggy.transcriptions.live({ clientRequestId: id })) {
-    if (event === 'microphone_ready') {
-      await giggy.transcriptions.sendLiveFrame({ generationUuid: data.generation_uuid, inputToken: data.input_token, sequence: 0, pcm: new Uint8Array(16000), complete: true });
+  for (const scenario of ['success', 'wrong-attempt', 'wrong-ack', 'wrong-artifact', 'early-close', 'timeout']) {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise(resolve => server.once('listening', resolve));
+    const baseURL = `http://127.0.0.1:${server.address().port}/v1`;
+    let connections = 0, frames = 0, stops = 0, authenticated = false;
+    server.on('connection', (socket, request) => {
+      connections++;
+      authenticated = request.headers['xi-api-key'] === apiKey && request.url === '/v1/audio/transcriptions';
+      socket.on('message', (bytes, binary) => {
+        if (binary) { frames++; assert.equal(bytes.length, 16000); return; }
+        const message = JSON.parse(bytes.toString());
+        if (message.type === 'start') {
+          assert.deepEqual(message, { type: 'start', format: 'raw', encoding: 'LINEAR16', sampleRateHz: 16000, interimResults: true, options: { endpointing: 'external' } });
+          socket.send(JSON.stringify({ type: 'generation_created', generation_uuid: id }));
+          socket.send(JSON.stringify({ type: 'ready', generation_uuid: id, attempt: 1, sampleRateHz: 16000 }));
+        } else {
+          assert.equal(message.type, 'stop'); stops++;
+          if (scenario === 'early-close') { socket.close(); return; }
+          if (scenario === 'timeout') return;
+          socket.send(JSON.stringify({ type: 'input_complete', generation_uuid: id, sequence: scenario === 'wrong-ack' ? 2 : 1 }));
+          socket.send(JSON.stringify({ type: 'transcription', generation_uuid: id, attempt: scenario === 'wrong-attempt' ? 2 : 1, sequence: 0, replace: true, is_final: true, alternatives: [{ transcript: 'hello' }] }));
+          socket.send(JSON.stringify({ type: 'generation_updated', generation_uuid: id, status: 'completed' }));
+          socket.close();
+        }
+      });
+    });
+    globalThis.fetch = async (url, init) => {
+      if (String(url) === `${baseURL}/generations/${id}`) {
+        assert.equal(new Headers(init.headers).get('xi-api-key'), apiKey);
+        return Response.json({ generation: { generation_uuid: id, status: 'completed', result: { url: 'https://artifact.invalid/result' } } });
+      }
+      assert.equal(String(url), 'https://artifact.invalid/result');
+      assert.equal(new Headers(init?.headers).get('xi-api-key'), null);
+      return Response.json({ text: scenario === 'wrong-artifact' ? 'wrong' : 'hello', audio_duration_ms: 500 });
+    };
+    const giggy = new Giggy({ apiKey, baseURL });
+    let final;
+    try {
+      for await (const { event, data } of giggy.transcriptions.live({ timeoutMs: scenario === 'timeout' ? 100 : 3000 })) {
+        if (event === 'generation_created') assert.equal(data.generation.generation_uuid, id);
+        if (event === 'microphone_ready') {
+          await assert.rejects(giggy.transcriptions.sendLiveFrame({ generationUuid: id, sequence: 1, pcm: new Uint8Array(16000) }), /sequence/);
+          await giggy.transcriptions.sendLiveFrame({ generationUuid: id, sequence: 0, pcm: new Uint8Array(16000), complete: true });
+        }
+        if (event === 'transcript_chunk') final = data.text;
+      }
+      assert.equal(scenario, 'success');
+      assert.equal(final, 'hello');
+    } catch (error) {
+      assert.notEqual(scenario, 'success', String(error));
+      assert.match(error.message, /fence|acknowledgement|differs|closed|timed out/i);
+    } finally {
+      for (const socket of server.clients) socket.terminate();
+      await new Promise(resolve => server.close(resolve));
     }
+    assert.equal(authenticated, true);
+    assert.equal(connections, 1);
+    assert.equal(frames, 1);
+    assert.equal(stops, 1);
   }
-  assert.equal(requests[0].url, 'https://giggy.ai/v1/audio/transcriptions');
-  assert.deepEqual(JSON.parse(requests[0].init.body), { mode: 'streaming', microphone: true, client_request_id: id });
-  assert.equal(requests[1].url, `https://giggy.ai/api/generations/${id}/stt-input`);
-  assert.equal(new Headers(requests[1].init.headers).get('xi-api-key'), null);
-  assert.equal(JSON.parse(requests[1].init.body).sequence, 0);
 });
