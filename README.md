@@ -16,7 +16,7 @@ Requires Node.js 22 or newer.
 npm install @giggy-ai/sdk
 ```
 
-STT is available in the published **0.1.1** release. Install `npm install @giggy-ai/sdk@0.1.1` to reproduce these examples. Version 0.1.0 provides TTS only.
+Published **0.1.1** provides recording STT and the earlier live transport; version 0.1.0 provides TTS only. The WebSocket live example requires this unreleased source checkout: clone this repository, run `npm ci && npm run build`, then install that local directory in your application with `npm install /path/to/giggy-js`. Package publication is separate from merging these source changes.
 
 Choose another integration in the [developer tool guide](https://giggy.ai/docs/speech-api#api-developer-tools): [Python](https://github.com/giggy-ai/giggy-python), [Pipecat TTS/live STT](https://github.com/giggy-ai/pipecat-giggy), [n8n TTS](https://github.com/giggy-ai/n8n-nodes-giggy), or [MCP speech/transcription tools](https://github.com/giggy-ai/giggy-mcp). For executable recording and TTS walkthroughs, use [giggy-examples](https://github.com/giggy-ai/giggy-examples).
 
@@ -30,12 +30,12 @@ export GIGGY_API_KEY="giggy_sk_..."
 
 ## Find a Giggy voice
 
-Available voices for your Giggy account are returned by `GET https://giggy.ai/v1/voices`. This endpoint requires a Giggy API key as a bearer token. Each entry's `voice_id` is the UUID to pass as `voiceId` to the SDK.
+Available voices for your Giggy account are returned by `GET https://api.giggy.ai/v1/voices`. This endpoint requires a Giggy API key as a bearer token. Each entry's `voice_id` is the UUID to pass as `voiceId` to the SDK.
 
 ```bash
 curl --fail --show-error \
   --header "Authorization: Bearer ${GIGGY_API_KEY}" \
-  "https://giggy.ai/v1/voices"
+  "https://api.giggy.ai/v1/voices"
 ```
 
 The response contains a `voices` array; use `voices[].voice_id`:
@@ -104,7 +104,7 @@ const audio = await giggy.speech.create({
 await writeFile('speech.mp3', audio);
 ```
 
-The default request is `POST https://giggy.ai/v1/text-to-speech` with `model_id=giggyspeech`, `mode=batch`, and `output_format=mp3_24000_160`.
+The default request is `POST https://api.giggy.ai/v1/text-to-speech` with `model_id=giggyspeech`, `mode=batch`, and `output_format=mp3_24000_160`.
 
 ## Fast speech
 
@@ -180,13 +180,15 @@ EOF alone does not prove success: `result()` checks the durable generation. If t
 
 ## Live microphone PCM session
 
-`giggy.transcriptions.live()` opens the existing paid Streaming SSE session. This runnable example replays a short recording in real time through the live input contract, so it needs no microphone device. Convert a 0.5–10 second recording to headerless PCM16 mono 16 kHz first:
+This checkout adds the WebSocket transport; it is not yet a package-registry release. Install this checkout to use this example. Published versions retain their earlier live transport. Recording `stream()` remains explicit HTTPS/SSE. New API requests default to `https://api.giggy.ai/v1`; existing `https://giggy.ai/v1` clients remain supported. Live sessions use one authenticated socket, binary PCM and one JSON `stop`, with no per-frame HTTP requests. The application supplies turn boundaries. The server assigns the generation ID; omit client request IDs. The SDK checks the final input ACK, transcript identity and saved text/duration before successful completion.
+
+`giggy.transcriptions.live()` opens the paid live WebSocket session at `wss://api.giggy.ai/v1/audio/transcriptions`. This runnable example replays a short recording in real time through the live input contract, so it needs no microphone device. Convert a 0.5–10 second recording to headerless PCM16 mono 16 kHz first:
 
 ```bash
 ffmpeg -i input.mp3 -ac 1 -ar 16000 -f s16le live.pcm
 ```
 
-Then run the following as a Node.js module with `GIGGY_API_KEY` set. The sender and SSE reader run concurrently. For a real microphone, replace the file chunks with captured PCM16 frames, keeping the same ordering, pacing, final frame, and error handling.
+Then run the following as a Node.js module with `GIGGY_API_KEY` set. The sender and WebSocket event reader run concurrently. For a real microphone, replace the file chunks with captured PCM16 frames, keeping the same ordering, pacing, final frame, and error handling.
 
 ```js
 import { readFile } from 'node:fs/promises';
@@ -210,11 +212,11 @@ try {
         for (let offset = 0; offset < pcm.length; offset += 3200) {
           const frame = pcm.subarray(offset, offset + 3200);
           await giggy.transcriptions.sendLiveFrame({ generationUuid: ready.generation_uuid,
-            inputToken: ready.input_token, sequence: sequence++, pcm: frame, signal: stop.signal });
+            sequence: sequence++, pcm: frame, signal: stop.signal });
           await delay(frame.length / 32, undefined, { signal: stop.signal });
         }
         await giggy.transcriptions.sendLiveFrame({ generationUuid: ready.generation_uuid,
-          inputToken: ready.input_token, sequence, pcm: new Uint8Array(), complete: true, signal: stop.signal });
+          sequence, pcm: new Uint8Array(), complete: true, signal: stop.signal });
       })().catch(error => { senderError = error; stop.abort(); });
     }
     if (event === 'transcript_chunk') console.log('Replace preview:', data.text);
@@ -228,7 +230,7 @@ if (!generationId) throw new Error('No admitted generation');
 console.log('Final:', (await giggy.transcriptions.result(generationId)).text);
 ```
 
-Await each accepted frame before incrementing `sequence`; a frame is at most 32,000 bytes. Closing an unfinished live stream cancels its work. Never automatically reconnect or resend an ambiguously accepted frame. Follow the [full live input contract](https://giggy.ai/docs/speech-api#api-stt-streaming) for readiness, framing, duration, cancellation, and billing. The SDK does not provide microphone capture or turn detection.
+Await each local socket send before incrementing `sequence`; a frame is at most 32,000 bytes. Closing an unfinished live stream cancels its work. Never automatically reconnect or resend an ambiguously accepted frame. Follow the [full live input contract](https://giggy.ai/docs/speech-api#api-stt-streaming) for readiness, framing, duration, cancellation, and billing. The SDK does not provide microphone capture or turn detection.
 
 ## Custom speed
 
@@ -263,13 +265,13 @@ Unsuccessful API responses throw `GiggyAPIError`, which exposes `status`, the ra
 - `giggy.transcriptions.get(generationUuid)` → generation status
 - `giggy.transcriptions.result(generationUuid)` → completed transcript
 - `giggy.transcriptions.stream(params)` → parsed SSE events
-- `giggy.transcriptions.live(params)` → live SSE events
-- `giggy.transcriptions.sendLiveFrame(params)` → accepted PCM frame
+- `giggy.transcriptions.live(params)` → live WebSocket events
+- `giggy.transcriptions.sendLiveFrame(params)` → locally sent binary PCM frame
 
 ## Developer resources
 
 - Documentation: https://giggy.ai/docs/speech-api
-- OpenAPI: https://giggy.ai/v1/openapi.json
+- OpenAPI: https://api.giggy.ai/v1/openapi.json
 - Runnable integrations: https://github.com/giggy-ai/giggy-examples
 - MCP: https://github.com/giggy-ai/giggy-mcp
 - Python SDK: https://github.com/giggy-ai/giggy-python
@@ -296,18 +298,18 @@ All methods belong to `giggy.transcriptions`. SDK defaults select free Batch; th
 | `get(uuid, signal?)` | Owning generation UUID | Promise of generation status |
 | `result(uuid, signal?)` | Completed generation UUID | Promise of signed transcript JSON; no API key sent to artifact host |
 | `stream(params)` | `audioPath`, optional `language/clientRequestId/signal`; paid Streaming | Async generator of typed transcript events |
-| `live({ clientRequestId?, signal? })` | Paid live admission; automatic language detection | Async generator of typed transcript events |
-| `sendLiveFrame({ generationUuid, inputToken, sequence, pcm, complete?, signal? })` | Ordered PCM16 Uint8Array; even length; maximum 32,000 bytes | Promise<void> after acknowledged acceptance |
+| `live({ language?, timeoutMs?, signal? })` | Paid live admission; automatic language detection | Async generator of typed transcript events |
+| `sendLiveFrame({ generationUuid, sequence, pcm, complete?, signal? })` | Ordered PCM16 Uint8Array; even length; maximum 32,000 bytes | Promise<void> after local socket send; final acceptance arrives as input_complete |
 
 `transcribe` applies a single deadline from before upload through status polling and artifact retrieval. Its timeout is combined with your AbortSignal; aborting either interrupts network I/O and polling waits. A timeout or abort stops this client call, but does not cancel an admitted uploaded recording. The error contains its UUID when admission was received. `timeoutMs` must be an integer from 1 to 4294967295; `pollIntervalMs` must be a positive integer. Other methods accept your signal so your application can set its own deadline.
 
-`TranscriptionEvent` is a discriminated union: checking `event` narrows `data` to the existing payload. For `generation_created`, read `data.generation.generation_uuid`; for `microphone_ready`, read `data.generation_uuid/attempt/input_token`; for `transcript_chunk`, use `data.text/sequence/replace/complete`; for `generation_updated`, read `data.status` and optional `data.generation`. Never persist the input token. Replace cumulative preview text, and reconcile durable completion after EOF. The SDK rejects an unknown named event rather than silently treating it as a supported payload.
+`TranscriptionEvent` is a discriminated union: checking `event` narrows `data` to the existing payload. For `generation_created`, read `data.generation.generation_uuid`; for `microphone_ready`, read `data.generation_uuid/attempt`; for `transcript_chunk`, use `data.text/sequence/replace/complete`; for `generation_updated`, read `data.status` and optional `data.generation`. Replace cumulative preview text, and reconcile durable completion after EOF. The SDK rejects an unknown named event rather than silently treating it as a supported payload.
 
 ## Troubleshooting and migration
 
 ### Migrating OpenAI speech and transcription
 
-OpenAI-compatible **TTS** uses `https://giggy.ai/v1/audio/speech`. Keep the OpenAI speech client, set `baseURL: 'https://giggy.ai/v1'`, use your Giggy API key, set `model: 'giggyspeech'`, and use a Giggy voice UUID. Choose a supported response format and set `maxRetries: 0` for synthesis. See the [existing OpenAI-client example](https://github.com/giggy-ai/giggy-examples/tree/main/node/openai-compatible).
+OpenAI-compatible **TTS** uses `https://api.giggy.ai/v1/audio/speech`. Keep the OpenAI speech client, set `baseURL: 'https://api.giggy.ai/v1'`, use your Giggy API key, set `model: 'giggyspeech'`, and use a Giggy voice UUID. Choose a supported response format and set `maxRetries: 0` for synthesis. See the [existing OpenAI-client example](https://github.com/giggy-ai/giggy-examples/tree/main/node/openai-compatible).
 
 **STT is a separate contract.** Replace an OpenAI `audio.transcriptions.create(...)` call with `giggy.transcriptions.transcribe({ audioPath: 'recording.wav', mode: 'batch' })` and consume `result.text`. A `baseURL` change alone does not migrate STT: Giggy's REST input is raw WAV with `xi-api-key`, rather than an OpenAI multipart upload, and its Batch/Fast admission returns a generation UUID before the final transcript. The SDK handles that existing lifecycle. SDK transcription defaults to Batch; raw REST defaults to paid Fast. Convert input locally to PCM16 mono 16 kHz WAV and remove unsupported transcription options rather than inventing fields.
 
