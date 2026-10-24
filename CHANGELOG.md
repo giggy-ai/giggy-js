@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Use api.giggy.ai as the default API origin; preserve legacy API compatibility. Live STT uses one authenticated WebSocket with binary PCM, explicit stop, fenced final events and canonical result verification. Server-assigned live IDs replace clientRequestId; recorded-file SSE remains explicit. No automatic replay or fallback.
+
 ## 0.1.1
 
 ### Documentation

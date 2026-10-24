@@ -16,7 +16,7 @@ Requires Node.js 22 or newer.
 npm install @giggy-ai/sdk
 ```
 
-Published **0.1.1** provides recording STT and the earlier live transport; version 0.1.0 provides TTS only. The WebSocket live example requires this unreleased source checkout: clone this repository, run `npm ci && npm run build`, then install that local directory in your application with `npm install /path/to/giggy-js`. Package publication is separate from merging these source changes.
+Version **0.2.0** provides the current WebSocket live transport. Install `npm install @giggy-ai/sdk@0.2.0`. Version 0.1.1 retains its earlier live transport; version 0.1.0 provides TTS only. Existing applications can keep their installed versions and legacy endpoint while upgrading deliberately.
 
 Choose another integration in the [developer tool guide](https://giggy.ai/docs/speech-api#api-developer-tools): [Python](https://github.com/giggy-ai/giggy-python), [Pipecat TTS/live STT](https://github.com/giggy-ai/pipecat-giggy), [n8n TTS](https://github.com/giggy-ai/n8n-nodes-giggy), or [MCP speech/transcription tools](https://github.com/giggy-ai/giggy-mcp). For executable recording and TTS walkthroughs, use [giggy-examples](https://github.com/giggy-ai/giggy-examples).
 
@@ -180,7 +180,7 @@ EOF alone does not prove success: `result()` checks the durable generation. If t
 
 ## Live microphone PCM session
 
-This checkout adds the WebSocket transport; it is not yet a package-registry release. Install this checkout to use this example. Published versions retain their earlier live transport. Recording `stream()` remains explicit HTTPS/SSE. New API requests default to `https://api.giggy.ai/v1`; existing `https://giggy.ai/v1` clients remain supported. Live sessions use one authenticated socket, binary PCM and one JSON `stop`, with no per-frame HTTP requests. The application supplies turn boundaries. The server assigns the generation ID; omit client request IDs. The SDK checks the final input ACK, transcript identity and saved text/duration before successful completion.
+This example requires version 0.2.0 or newer. Earlier versions retain their legacy live transport. Recording `stream()` remains explicit HTTPS/SSE. New API requests default to `https://api.giggy.ai/v1`; existing `https://giggy.ai/v1` clients remain supported. Live sessions use one authenticated socket, binary PCM and one JSON `stop`, with no per-frame HTTP requests. The application supplies turn boundaries. The server assigns the generation ID; omit client request IDs. The SDK checks the final input ACK, transcript identity and saved text/duration before successful completion.
 
 `giggy.transcriptions.live()` opens the paid live WebSocket session at `wss://api.giggy.ai/v1/audio/transcriptions`. This runnable example replays a short recording in real time through the live input contract, so it needs no microphone device. Convert a 0.5–10 second recording to headerless PCM16 mono 16 kHz first:
 
